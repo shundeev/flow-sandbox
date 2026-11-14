@@ -17,6 +17,8 @@ on:
 permissions:
   pull-requests: write
   contents: write      # auto-merge is turned on through the contents permission
+  checks: read         # gh pr checks --required reads the head's check runs and statuses
+  statuses: read
 
 jobs:
   ready:
@@ -28,12 +30,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
           HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
           HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
           HEAD_REPO: ${{ github.event.workflow_run.head_repository.full_name }}
           EVENT_PRS: ${{ toJSON(github.event.workflow_run.pull_requests.*.number) }}
         run: |
-          echo "CI run: $CONCLUSION on $HEAD_BRANCH at $HEAD_SHA"
+          echo "CI run id: $RUN_ID, $CONCLUSION on $HEAD_BRANCH at $HEAD_SHA"
           if [ "$CONCLUSION" != "success" ]; then
             echo "decision: CI did not succeed, so no pull request is touched"
             exit 0
@@ -57,14 +60,18 @@ jobs:
             if [ "$draft" != "true" ]; then echo "decision: #$pr is not a draft, skipped"; continue; fi
             if [ "$hold" = "true" ]; then echo "decision: #$pr carries the label hold, left a draft"; continue; fi
             if [ "$head" != "$HEAD_SHA" ]; then echo "decision: #$pr has a newer commit than this run ($head), skipped: its own run decides"; continue; fi
-            if ! checks="$(gh pr checks "$pr" --required 2>&1)"; then
-              echo "$checks"
-              echo "decision: a required check of #$pr has not passed, left a draft"
+            checks="$(gh pr checks "$pr" --required 2>&1)" && rc=0 || rc=$?
+            echo "$checks"
+            if [ "$rc" != 0 ]; then
+              echo "decision: gh pr checks --required exited with exit code $rc for #$pr (1: a check failed or none is required, 8: pending), left a draft"
               continue
             fi
-            echo "$checks"
-            echo "decision: every required check of #$pr passed, gh pr ready"
-            gh pr ready "$pr"
+            echo "decision: every required check of #$pr passed (exit code 0), gh pr ready"
+            if ! out="$(gh pr ready "$pr" 2>&1)"; then
+              echo "$out"
+              echo "decision: gh pr ready failed for #$pr, left a draft; going on with the next"
+              continue
+            fi
             if out="$(gh pr merge "$pr" --auto --squash 2>&1)"; then
               echo "decision: auto-merge is on for #$pr"
             else
