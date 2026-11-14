@@ -1,0 +1,44 @@
+name: Ready when green
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+permissions:
+  pull-requests: write
+  contents: write
+jobs:
+  ready:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mark draft PRs ready and turn on auto-merge
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          EVENT_PRS: ${{ toJSON(github.event.workflow_run.pull_requests.*.number) }}
+        run: |
+          echo "CI conclusion: $CONCLUSION; head branch: $HEAD_BRANCH"
+          if [ "$CONCLUSION" != "success" ]; then
+            echo "decision: CI did not succeed; leave PRs alone"
+            exit 0
+          fi
+          prs=$(echo "$EVENT_PRS" | jq -r '.[]?')
+          if [ -n "$prs" ]; then
+            echo "source: workflow_run.pull_requests -> $(echo $prs)"
+          else
+            prs=$(gh pr list --head "$HEAD_BRANCH" --state open --json number --jq '.[].number')
+            echo "source: fallback gh pr list --head $HEAD_BRANCH -> $(echo $prs) (workflow_run.pull_requests was empty)"
+          fi
+          for pr in $prs; do
+            draft=$(gh pr view "$pr" --json isDraft --jq .isDraft)
+            echo "PR #$pr isDraft=$draft"
+            if [ "$draft" = "true" ]; then
+              echo "decision: gh pr ready $pr"
+              gh pr ready "$pr"
+              echo "decision: gh pr merge --auto --squash $pr"
+              gh pr merge "$pr" --auto --squash
+            else
+              echo "decision: PR #$pr is not a draft; skip"
+            fi
+          done
