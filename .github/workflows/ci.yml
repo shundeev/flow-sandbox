@@ -1,0 +1,15 @@
+name: CI
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fail when FAIL exists
+        run: |
+          if [ -e FAIL ]; then echo "FAIL file present"; exit 1; fi
+          echo "no FAIL file"
